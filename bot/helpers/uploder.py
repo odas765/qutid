@@ -1,19 +1,18 @@
 import os
 import shutil
 import asyncio
-import requests
 import random
 import string
+import requests
 
 from ..settings import bot_set
 from .message import send_message, edit_message
 from .utils import *
 
-
 # ============================================================
 # 🔹 GoFile Configuration
 # ============================================================
-GOFILE_TOKEN = "BS6TMlxgJW5z8Pi1t2JHjVLAj5aYkUON"  # <-- Replace this with your GoFile token
+GOFILE_TOKEN = "dM3oQGFPvzXGURpzFn5OtlZXO6rKo0vj"  # <-- Replace this with your GoFile token
 # ============================================================
 
 
@@ -26,7 +25,6 @@ def random_folder_name():
 
 
 def get_account_id():
-    """Get GoFile account ID using token"""
     headers = {"Authorization": f"Bearer {GOFILE_TOKEN}"}
     r = requests.get("https://api.gofile.io/accounts/getid", headers=headers)
     r.raise_for_status()
@@ -37,7 +35,6 @@ def get_account_id():
 
 
 def get_root_folder(account_id):
-    """Get root folder ID"""
     headers = {"Authorization": f"Bearer {GOFILE_TOKEN}"}
     r = requests.get(f"https://api.gofile.io/accounts/{account_id}", headers=headers)
     r.raise_for_status()
@@ -48,7 +45,6 @@ def get_root_folder(account_id):
 
 
 def create_folder(parent_id, name=None):
-    """Create subfolder in root folder"""
     headers = {
         "Authorization": f"Bearer {GOFILE_TOKEN}",
         "Content-Type": "application/json"
@@ -65,7 +61,6 @@ def create_folder(parent_id, name=None):
 
 
 def upload_file(file_path, folder_id):
-    """Upload a single file to GoFile folder"""
     headers = {"Authorization": f"Bearer {GOFILE_TOKEN}"}
     with open(file_path, "rb") as f:
         files = {"file": f}
@@ -79,22 +74,15 @@ def upload_file(file_path, folder_id):
         raise Exception(f"❌ Failed to upload {os.path.basename(file_path)}: {res_json}")
 
 
-def create_direct_zip_link(folder_id):
-    """Generate ZIP direct link for folder"""
-    headers = {
-        "Authorization": f"Bearer {GOFILE_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    r = requests.post(f"https://api.gofile.io/contents/{folder_id}/directlinks", headers=headers, json={})
-    r.raise_for_status()
-    data = r.json()
-    if data.get("status") != "ok":
-        raise Exception(f"❌ Failed to create direct link: {data}")
-    return data["data"]["directLink"]
+def get_folder_link(folder_id):
+    """Return the GoFile folder link (no ZIP needed)"""
+    return f"https://gofile.io/d/{folder_id}"
 
 
 async def gofile_upload_folder(folder_path):
-    """Upload all files in folder to GoFile and return ZIP link"""
+    """
+    Upload all files in a folder to GoFile and return the folder link.
+    """
     if not GOFILE_TOKEN or GOFILE_TOKEN == "PASTE_YOUR_TOKEN_HERE":
         raise Exception("⚠️ Missing GoFile token. Paste it at the top.")
 
@@ -107,11 +95,11 @@ async def gofile_upload_folder(folder_path):
         if os.path.isfile(file_path):
             upload_file(file_path, new_folder)
 
-    return create_direct_zip_link(new_folder)
+    return get_folder_link(new_folder)
 
 
 # ============================================================
-# 🧱 Upload Handlers (Bot Integration)
+# 🧱 Upload Handlers
 # ============================================================
 
 async def track_upload(metadata, user, disable_link=False):
