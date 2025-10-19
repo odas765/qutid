@@ -1,20 +1,96 @@
 import os
+import shutil
+import asyncio
+import requests
+import random
+import string
 
 from ..settings import bot_set
 from .message import send_message, edit_message
 from .utils import *
 
-#
-#
-#  TASK HANDLER
-#
-#
+
+# ============================================================
+# 🧩 GOFILE CONFIGURATION
+# ============================================================
+# Paste your GoFile API token below
+GOFILE_TOKEN = "BS6TMlxgJW5z8Pi1t2JHjVLAj5aYkUON"  # <-- 🔹 Replace this with your GoFile token
+# ============================================================
+
+
+# ============================================================
+# 🧠 GOFILE UPLOAD UTILITIES
+# ============================================================
+
+def random_folder_name():
+    """Generate a random GoFile folder name"""
+    return "Music_" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+
+
+async def create_gofile_folder(parentFolderId=None):
+    """Create a new folder in GoFile using API and return folderId and link"""
+    token = GOFILE_TOKEN
+    name = random_folder_name()
+    data = {"token": token, "folderName": name}
+    if parentFolderId:
+        data["parentFolderId"] = parentFolderId
+
+    res = requests.put("https://api.gofile.io/createFolder", data=data).json()
+    if res["status"] == "ok":
+        folder_id = res["data"]["id"]
+        link = res["data"]["link"]
+        return folder_id, link
+    else:
+        raise Exception(f"Failed to create GoFile folder: {res}")
+
+
+async def gofile_upload_folder(folder_path: str):
+    """
+    Upload all files from a folder into a newly created GoFile folder
+    and return that GoFile folder's share link.
+    """
+    token = GOFILE_TOKEN
+    if not token or token == "PASTE_YOUR_TOKEN_HERE":
+        raise Exception("⚠️ GoFile token missing. Please paste it at the top of the file.")
+
+    # Get upload server
+    server = requests.get("https://api.gofile.io/getServer").json()['data']['server']
+
+    # Create random GoFile folder
+    folder_id, folder_link = await create_gofile_folder()
+
+    # Loop through all files in local folder and upload
+    for root, _, files in os.walk(folder_path):
+        for file in files:
+            local_file = os.path.join(root, file)
+            with open(local_file, 'rb') as f:
+                res = requests.post(
+                    f"https://{server}.gofile.io/uploadFile",
+                    files={'file': f},
+                    data={'token': token, 'folderId': folder_id}
+                ).json()
+                if res["status"] != "ok":
+                    print(f"❌ Failed to upload {file}: {res}")
+
+    return folder_link
+
+
+# ============================================================
+# 🧱 TASK HANDLER
+# ============================================================
 
 async def track_upload(metadata, user, disable_link=False):
     if bot_set.upload_mode == 'Local':
         await local_upload(metadata, user)
+
     elif bot_set.upload_mode == 'Telegram':
-        await telegram_upload(metadata, user)
+        try:
+            # single track uploads
+            link = await gofile_upload_folder(os.path.dirname(metadata['filepath']))
+            await send_message(user, f"🎵 **Track uploaded to GoFile folder:**\n{link}")
+        except Exception as e:
+            await send_message(user, f"❌ Track upload failed!\n{e}")
+
     else:
         rclone_link, index_link = await rclone_upload(user, metadata['filepath'])
         if not disable_link:
@@ -24,20 +100,19 @@ async def track_upload(metadata, user, disable_link=False):
         os.remove(metadata['filepath'])
     except FileNotFoundError:
         pass
-        
 
 
 async def album_upload(metadata, user):
     if bot_set.upload_mode == 'Local':
         await local_upload(metadata, user)
+
     elif bot_set.upload_mode == 'Telegram':
-        if bot_set.album_zip:
-            for item in metadata['folderpath']:
-                await send_message(user,item,'doc', 
-                    caption=await create_simple_text(metadata, user)
-                )
-        else:
-            await batch_telegram_upload(metadata, user)
+        try:
+            link = await gofile_upload_folder(metadata['folderpath'])
+            await send_message(user, f"📀 **Album uploaded to GoFile folder:**\n{link}")
+        except Exception as e:
+            await send_message(user, f"❌ Album upload failed!\n{e}")
+
     else:
         rclone_link, index_link = await rclone_upload(user, metadata['folderpath'])
         if metadata['poster_msg']:
@@ -54,14 +129,14 @@ async def album_upload(metadata, user):
 async def artist_upload(metadata, user):
     if bot_set.upload_mode == 'Local':
         await local_upload(metadata, user)
+
     elif bot_set.upload_mode == 'Telegram':
-        if bot_set.artist_zip:
-            for item in metadata['folderpath']:
-                await send_message(user,item,'doc', 
-                    caption=await create_simple_text(metadata, user)
-                )
-        else:
-            pass # artist telegram uploads are handled by album fucntion
+        try:
+            link = await gofile_upload_folder(metadata['folderpath'])
+            await send_message(user, f"🎤 **Artist uploaded to GoFile folder:**\n{link}")
+        except Exception as e:
+            await send_message(user, f"❌ Artist upload failed!\n{e}")
+
     else:
         rclone_link, index_link = await rclone_upload(user, metadata['folderpath'])
         if metadata['poster_msg']:
@@ -75,18 +150,17 @@ async def artist_upload(metadata, user):
     await cleanup(None, metadata)
 
 
-
 async def playlist_upload(metadata, user):
     if bot_set.upload_mode == 'Local':
         await local_upload(metadata, user)
+
     elif bot_set.upload_mode == 'Telegram':
-        if bot_set.playlist_zip:
-            for item in metadata['folderpath']:
-                await send_message(user,item,'doc', 
-                    caption=await create_simple_text(metadata, user)
-                )
-        else:
-            await batch_telegram_upload(metadata, user)
+        try:
+            link = await gofile_upload_folder(metadata['folderpath'])
+            await send_message(user, f"🎧 **Playlist uploaded to GoFile folder:**\n{link}")
+        except Exception as e:
+            await send_message(user, f"❌ Playlist upload failed!\n{e}")
+
     else:
         if bot_set.playlist_sort and not bot_set.playlist_zip:
             if bot_set.disable_sort_link:
@@ -97,7 +171,7 @@ async def playlist_upload(metadata, user):
                         rclone_link, index_link = await rclone_upload(user, track['filepath'])
                         if not bot_set.disable_sort_link:
                             await post_simple_message(user, track, rclone_link, index_link)
-                    except ValueError: # might try to upload track which is not available
+                    except ValueError:
                         pass
         else:
             rclone_link, index_link = await rclone_upload(user, metadata['folderpath'])
@@ -109,20 +183,12 @@ async def playlist_upload(metadata, user):
             else:
                 await post_simple_message(user, metadata, rclone_link, index_link)
 
-#
-#
-#  CORE
-#
-#
+
+# ============================================================
+# ⚙️ CORE UPLOAD HELPERS
+# ============================================================
 
 async def rclone_upload(user, realpath):
-    """
-    Args:
-        user: user details
-        realpath: full path to (not used for uploading)
-    Returns:
-        rclone_link, index_link
-    """
     path = f"{Config.DOWNLOAD_BASE_DIR}/{user['r_id']}/"
     cmd = f'rclone copy --config ./rclone.conf "{path}" "{Config.RCLONE_DEST}"'
     task = await asyncio.create_subprocess_shell(cmd)
@@ -132,22 +198,14 @@ async def rclone_upload(user, realpath):
 
 
 async def local_upload(metadata, user):
-    """
-    Copies directory to local storage and merges contents if the destination exists.
-    Args:
-        metadata: metadata dict of item
-        user: user details
-    """
     to_move = f"{Config.DOWNLOAD_BASE_DIR}/{user['r_id']}/{metadata['provider']}"
     destination = os.path.join(Config.LOCAL_STORAGE, os.path.basename(to_move))
 
-    # If the destination directory exists, merge contents
     if os.path.exists(destination):
         for item in os.listdir(to_move):
             src_item = os.path.join(to_move, item)
             dest_item = os.path.join(destination, item)
 
-            # If it's a file, copy it; if it's a directory, use copytree
             if os.path.isdir(src_item):
                 if not os.path.exists(dest_item):
                     shutil.copytree(src_item, dest_item)
@@ -157,30 +215,3 @@ async def local_upload(metadata, user):
         shutil.copytree(to_move, destination)
     
     shutil.rmtree(to_move)
-
-
-async def telegram_upload(track, user):
-    """
-    Only upload a single track
-    Args:
-        track: track metadata
-        """
-    await send_message(user, track['filepath'], 'audio', meta=track)
-
-
-async def batch_telegram_upload(metadata, user):
-    """
-    Args:
-        metadata: full metadata
-        user: user details
-    """
-    if metadata['type'] == 'album' or metadata['type'] == 'playlist':
-        for track in metadata['tracks']:
-            try:
-                await telegram_upload(track, user)
-            except FileNotFoundError:
-                pass
-    elif metadata['type'] == 'artist':
-        for album in metadata['albums']:
-            for track in album['tracks']:
-                await telegram_upload(track, user)
