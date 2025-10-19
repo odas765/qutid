@@ -11,72 +11,107 @@ from .utils import *
 
 
 # ============================================================
-# 🧩 GOFILE CONFIGURATION
+# 🔹 GoFile Configuration
 # ============================================================
-# Paste your GoFile API token below
-GOFILE_TOKEN = "BS6TMlxgJW5z8Pi1t2JHjVLAj5aYkUON"  # <-- 🔹 Replace this with your GoFile token
+GOFILE_TOKEN = "BS6TMlxgJW5z8Pi1t2JHjVLAj5aYkUON"  # <-- Replace this with your GoFile token
 # ============================================================
 
 
 # ============================================================
-# 🧠 GOFILE UPLOAD UTILITIES
+# 🧩 GoFile Utilities
 # ============================================================
 
 def random_folder_name():
-    """Generate a random GoFile folder name"""
     return "Music_" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
 
 
-async def create_gofile_folder(parentFolderId=None):
-    """Create a new folder in GoFile using API and return folderId and link"""
-    token = GOFILE_TOKEN
-    name = random_folder_name()
-    data = {"token": token, "folderName": name}
-    if parentFolderId:
-        data["parentFolderId"] = parentFolderId
-
-    res = requests.put("https://api.gofile.io/createFolder", data=data).json()
-    if res["status"] == "ok":
-        folder_id = res["data"]["id"]
-        link = res["data"]["link"]
-        return folder_id, link
-    else:
-        raise Exception(f"Failed to create GoFile folder: {res}")
+def get_account_id():
+    """Get GoFile account ID using token"""
+    headers = {"Authorization": f"Bearer {GOFILE_TOKEN}"}
+    r = requests.get("https://api.gofile.io/accounts/getid", headers=headers)
+    r.raise_for_status()
+    data = r.json()
+    if data.get("status") != "ok":
+        raise Exception(f"❌ Failed to get account ID: {data}")
+    return data["data"]["id"]
 
 
-async def gofile_upload_folder(folder_path: str):
-    """
-    Upload all files from a folder into a newly created GoFile folder
-    and return that GoFile folder's share link.
-    """
-    token = GOFILE_TOKEN
-    if not token or token == "PASTE_YOUR_TOKEN_HERE":
-        raise Exception("⚠️ GoFile token missing. Please paste it at the top of the file.")
+def get_root_folder(account_id):
+    """Get root folder ID"""
+    headers = {"Authorization": f"Bearer {GOFILE_TOKEN}"}
+    r = requests.get(f"https://api.gofile.io/accounts/{account_id}", headers=headers)
+    r.raise_for_status()
+    data = r.json()
+    if data.get("status") != "ok":
+        raise Exception(f"❌ Failed to get root folder: {data}")
+    return data["data"]["rootFolder"]
 
-    # Get upload server
-    server = requests.get("https://api.gofile.io/getServer").json()['data']['server']
 
-    # Create random GoFile folder
-    folder_id, folder_link = await create_gofile_folder()
+def create_folder(parent_id, name=None):
+    """Create subfolder in root folder"""
+    headers = {
+        "Authorization": f"Bearer {GOFILE_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    payload = {"parentFolderId": parent_id}
+    if name:
+        payload["folderName"] = name
+    r = requests.post("https://api.gofile.io/contents/createFolder", headers=headers, json=payload)
+    r.raise_for_status()
+    data = r.json()
+    if data.get("status") != "ok":
+        raise Exception(f"❌ Failed to create folder: {data}")
+    return data["data"]["id"]
 
-    # Loop through all files in local folder and upload
-    for root, _, files in os.walk(folder_path):
-        for file in files:
-            local_file = os.path.join(root, file)
-            with open(local_file, 'rb') as f:
-                res = requests.post(
-                    f"https://{server}.gofile.io/uploadFile",
-                    files={'file': f},
-                    data={'token': token, 'folderId': folder_id}
-                ).json()
-                if res["status"] != "ok":
-                    print(f"❌ Failed to upload {file}: {res}")
 
-    return folder_link
+def upload_file(file_path, folder_id):
+    """Upload a single file to GoFile folder"""
+    headers = {"Authorization": f"Bearer {GOFILE_TOKEN}"}
+    with open(file_path, "rb") as f:
+        files = {"file": f}
+        data = {"folderId": folder_id}
+        r = requests.post("https://upload.gofile.io/uploadfile", headers=headers, files=files, data=data)
+    try:
+        res_json = r.json()
+    except Exception:
+        raise Exception(f"⚠️ Upload error: {r.text}")
+    if res_json.get("status") != "ok":
+        raise Exception(f"❌ Failed to upload {os.path.basename(file_path)}: {res_json}")
+
+
+def create_direct_zip_link(folder_id):
+    """Generate ZIP direct link for folder"""
+    headers = {
+        "Authorization": f"Bearer {GOFILE_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    r = requests.post(f"https://api.gofile.io/contents/{folder_id}/directlinks", headers=headers, json={})
+    r.raise_for_status()
+    data = r.json()
+    if data.get("status") != "ok":
+        raise Exception(f"❌ Failed to create direct link: {data}")
+    return data["data"]["directLink"]
+
+
+async def gofile_upload_folder(folder_path):
+    """Upload all files in folder to GoFile and return ZIP link"""
+    if not GOFILE_TOKEN or GOFILE_TOKEN == "PASTE_YOUR_TOKEN_HERE":
+        raise Exception("⚠️ Missing GoFile token. Paste it at the top.")
+
+    account_id = get_account_id()
+    root_folder = get_root_folder(account_id)
+    new_folder = create_folder(root_folder, random_folder_name())
+
+    for file in os.listdir(folder_path):
+        file_path = os.path.join(folder_path, file)
+        if os.path.isfile(file_path):
+            upload_file(file_path, new_folder)
+
+    return create_direct_zip_link(new_folder)
 
 
 # ============================================================
-# 🧱 TASK HANDLER
+# 🧱 Upload Handlers (Bot Integration)
 # ============================================================
 
 async def track_upload(metadata, user, disable_link=False):
@@ -85,9 +120,9 @@ async def track_upload(metadata, user, disable_link=False):
 
     elif bot_set.upload_mode == 'Telegram':
         try:
-            # single track uploads
-            link = await gofile_upload_folder(os.path.dirname(metadata['filepath']))
-            await send_message(user, f"🎵 **Track uploaded to GoFile folder:**\n{link}")
+            folder = os.path.dirname(metadata['filepath'])
+            link = await gofile_upload_folder(folder)
+            await send_message(user, link, 'text', caption="🎵 Track uploaded to GoFile folder")
         except Exception as e:
             await send_message(user, f"❌ Track upload failed!\n{e}")
 
@@ -109,7 +144,7 @@ async def album_upload(metadata, user):
     elif bot_set.upload_mode == 'Telegram':
         try:
             link = await gofile_upload_folder(metadata['folderpath'])
-            await send_message(user, f"📀 **Album uploaded to GoFile folder:**\n{link}")
+            await send_message(user, link, 'text', caption="📀 Album uploaded to GoFile folder")
         except Exception as e:
             await send_message(user, f"❌ Album upload failed!\n{e}")
 
@@ -117,7 +152,8 @@ async def album_upload(metadata, user):
         rclone_link, index_link = await rclone_upload(user, metadata['folderpath'])
         if metadata['poster_msg']:
             try:
-                await edit_art_poster(metadata, user, rclone_link, index_link, await format_string(lang.s.ALBUM_TEMPLATE, metadata, user))
+                await edit_art_poster(metadata, user, rclone_link, index_link,
+                                       await format_string(lang.s.ALBUM_TEMPLATE, metadata, user))
             except MessageNotModified:
                 pass
         else:
@@ -133,7 +169,7 @@ async def artist_upload(metadata, user):
     elif bot_set.upload_mode == 'Telegram':
         try:
             link = await gofile_upload_folder(metadata['folderpath'])
-            await send_message(user, f"🎤 **Artist uploaded to GoFile folder:**\n{link}")
+            await send_message(user, link, 'text', caption="🎤 Artist uploaded to GoFile folder")
         except Exception as e:
             await send_message(user, f"❌ Artist upload failed!\n{e}")
 
@@ -141,7 +177,8 @@ async def artist_upload(metadata, user):
         rclone_link, index_link = await rclone_upload(user, metadata['folderpath'])
         if metadata['poster_msg']:
             try:
-                await edit_art_poster(metadata, user, rclone_link, index_link, await format_string(lang.s.ARTIST_TEMPLATE, metadata, user))
+                await edit_art_poster(metadata, user, rclone_link, index_link,
+                                       await format_string(lang.s.ARTIST_TEMPLATE, metadata, user))
             except MessageNotModified:
                 pass
         else:
@@ -157,7 +194,7 @@ async def playlist_upload(metadata, user):
     elif bot_set.upload_mode == 'Telegram':
         try:
             link = await gofile_upload_folder(metadata['folderpath'])
-            await send_message(user, f"🎧 **Playlist uploaded to GoFile folder:**\n{link}")
+            await send_message(user, link, 'text', caption="🎧 Playlist uploaded to GoFile folder")
         except Exception as e:
             await send_message(user, f"❌ Playlist upload failed!\n{e}")
 
@@ -177,7 +214,8 @@ async def playlist_upload(metadata, user):
             rclone_link, index_link = await rclone_upload(user, metadata['folderpath'])
             if metadata['poster_msg']:
                 try:
-                    await edit_art_poster(metadata, user, rclone_link, index_link, await format_string(lang.s.PLAYLIST_TEMPLATE, metadata, user))
+                    await edit_art_poster(metadata, user, rclone_link, index_link,
+                                           await format_string(lang.s.PLAYLIST_TEMPLATE, metadata, user))
                 except MessageNotModified:
                     pass
             else:
@@ -185,7 +223,7 @@ async def playlist_upload(metadata, user):
 
 
 # ============================================================
-# ⚙️ CORE UPLOAD HELPERS
+# ⚙️ Existing Local & Rclone Uploads
 # ============================================================
 
 async def rclone_upload(user, realpath):
@@ -205,7 +243,6 @@ async def local_upload(metadata, user):
         for item in os.listdir(to_move):
             src_item = os.path.join(to_move, item)
             dest_item = os.path.join(destination, item)
-
             if os.path.isdir(src_item):
                 if not os.path.exists(dest_item):
                     shutil.copytree(src_item, dest_item)
@@ -213,5 +250,5 @@ async def local_upload(metadata, user):
                 shutil.copy2(src_item, dest_item)
     else:
         shutil.copytree(to_move, destination)
-    
+
     shutil.rmtree(to_move)
