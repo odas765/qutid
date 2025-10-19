@@ -10,7 +10,7 @@ from .utils import *
 # ============================================================
 # 🔹 GoFile Configuration
 # ============================================================
-GOFILE_TOKEN = "PASTE_YOUR_TOKEN_HERE"  # <-- Replace this with your GoFile token
+GOFILE_TOKEN = "dM3oQGFPvzXGURpzFn5OtlZXO6rKo0vj"  # <-- Replace this with your GoFile token
 FIXED_GOFILE_FOLDER_NAME = "MyMusic"    # <-- All uploads go here
 # ============================================================
 
